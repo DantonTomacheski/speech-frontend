@@ -30,9 +30,32 @@ const Controls: React.FC<ControlsProps> = ({
   status,
 }) => {
   // Determina se o botão Iniciar deve estar desabilitado
-  const isStartDisabled = isRecording || status === RecordingStatus.Connecting || status === RecordingStatus.Initializing || status === RecordingStatus.Stopping;
+  const isStartDisabled = isRecording || 
+    status === RecordingStatus.Connecting || 
+    status === RecordingStatus.Initializing || 
+    status === RecordingStatus.Stopping;
+    
   // Determina se o botão Parar deve estar desabilitado
-  const isStopDisabled = !isRecording;
+  const isStopDisabled = !isRecording || 
+    status === RecordingStatus.Stopping ||
+    status === RecordingStatus.Inactive;
+
+  // Obtém a classe CSS para o indicador de status
+  const getStatusClass = () => {
+    switch (status) {
+      case RecordingStatus.Recording:
+        return 'text-green-600 font-medium';
+      case RecordingStatus.Connecting:
+      case RecordingStatus.Initializing:
+        return 'text-blue-600 font-medium animate-pulse';
+      case RecordingStatus.Stopping:
+        return 'text-orange-600 font-medium';
+      case RecordingStatus.Error:
+        return 'text-red-600 font-medium';
+      default:
+        return 'text-gray-600';
+    }
+  };
 
   return (
     <div className="mb-6">
@@ -50,10 +73,12 @@ const Controls: React.FC<ControlsProps> = ({
               ? 'bg-gray-400 cursor-not-allowed' // Estilo desabilitado
               : 'bg-green-500 hover:bg-green-600 focus:ring-green-400 transform hover:-translate-y-0.5' // Estilo habilitado
             }
+            ${status === RecordingStatus.Recording ? 'hidden' : ''}
           `}
         >
           Iniciar Gravação
         </button>
+        
         {/* Botão Parar Gravação */}
         <button
           id="stopButton"
@@ -66,14 +91,26 @@ const Controls: React.FC<ControlsProps> = ({
               ? 'bg-gray-400 cursor-not-allowed' // Estilo desabilitado
               : 'bg-red-500 hover:bg-red-600 focus:ring-red-400 transform hover:-translate-y-0.5' // Estilo habilitado
             }
+            ${!isRecording ? 'hidden' : ''}
           `}
         >
           Parar Gravação
         </button>
       </div>
+      
       {/* Exibição do Status */}
-      <div id="status" className="text-center text-gray-600">
+      <div id="status" className={`text-center ${getStatusClass()}`}>
         Status: {status} {/* Exibe o status recebido via props */}
+        
+        {/* Indicador visual de atividade durante estados de transição */}
+        {(status === RecordingStatus.Connecting || 
+          status === RecordingStatus.Initializing) && (
+          <span className="inline-block ml-2">
+            <span className="animate-bounce">•</span>
+            <span className="animate-bounce delay-75">•</span>
+            <span className="animate-bounce delay-150">•</span>
+          </span>
+        )}
       </div>
     </div>
   );
