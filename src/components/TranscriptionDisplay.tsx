@@ -1,15 +1,5 @@
-// src/components/TranscriptionDisplay.tsx
 import React, { useRef, useEffect } from 'react';
-import { RecordingStatus } from '../types'; // Importa o enum de status
-
-/**
- * @interface TranscriptionDisplayProps
- * @description Propriedades para o componente TranscriptionDisplay.
- * @property {string} finalTranscription - O texto final acumulado da transcrição.
- * @property {string} interimTranscription - O texto interino atual da transcrição.
- * @property {RecordingStatus} status - O status atual da gravação
- * @property {boolean} isRecording - Indica se a gravação está ativa
- */
+import { RecordingStatus } from '../types';
 interface TranscriptionDisplayProps {
   finalTranscription: string;
   interimTranscription: string;
@@ -17,30 +7,20 @@ interface TranscriptionDisplayProps {
   isRecording: boolean;
 }
 
-/**
- * @function TranscriptionDisplay
- * @description Componente funcional para exibir a transcrição final e interina.
- * Inclui auto-scroll para o final quando novo texto final é adicionado.
- * @param {TranscriptionDisplayProps} props - As propriedades do componente.
- * @returns {React.ReactElement} O elemento React.
- */
 const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({
   finalTranscription,
   interimTranscription,
   status,
   isRecording
 }) => {
-  // Ref para o container de transcrição para permitir o scroll programático
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Efeito para rolar para o final sempre que a transcrição final mudar
   useEffect(() => {
     if (containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
-  }, [finalTranscription, interimTranscription]); // Dependência: executa quando finalTranscription ou interimTranscription muda
+  }, [finalTranscription, interimTranscription]);
 
-  // Determina a mensagem a ser exibida com base no status atual
   const getStatusMessage = () => {
     if (isRecording) {
       if (status === RecordingStatus.Connecting) {
@@ -59,28 +39,61 @@ const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({
 
   return (
     <div
-      ref={containerRef} // Associa a ref ao elemento div
-      className={`
-        h-72 overflow-y-auto border border-gray-300 p-4 rounded-lg text-lg text-gray-800 leading-relaxed mb-4
-        ${status === RecordingStatus.Recording ? 'bg-green-50' : 'bg-gray-50'}
-      `} // Muda a cor de fundo quando está gravando
-      aria-live="polite" // Melhora a acessibilidade para leitores de tela
+      ref={containerRef}
+      className="w-full max-w-lg h-60 overflow-y-auto glassmorphism p-5 text-base leading-relaxed mb-6 transition-all duration-300"
+      aria-live="polite"
     >
-      {/* Exibe a mensagem apropriada com base no status */}
-      <p>{getStatusMessage()}</p>
-      
-      {/* Exibe a transcrição interina com cor diferente */}
-      {interimTranscription && (
-        <p className="text-gray-500">{interimTranscription}</p>
-      )}
-      
-      {/* Indicador visual de gravação ativa */}
-      {status === RecordingStatus.Recording && (
-        <div className="fixed bottom-4 left-4 flex items-center space-x-2">
-          <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
-          <span className="text-sm text-red-500 font-medium">Gravando</span>
+      {isRecording && (
+        <div className="absolute inset-x-0 bottom-0 h-1 overflow-hidden">
+          <div className="h-full bg-gradient-to-r from-accent-turquoise via-accent-blue to-accent-red opacity-30 animate-gradient-flow"></div>
         </div>
       )}
+
+      <div className="space-y-4">
+        {!finalTranscription && !interimTranscription && (
+          <div className="flex items-center justify-center h-full text-center text-text-secondary">
+            <div>
+              {status === RecordingStatus.Recording ? (
+                <div className="space-y-3">
+                  <p className="text-lg font-light">Suas palavras vão aparecer aqui</p>
+                  <div className="inline-block w-3 h-5 bg-accent-turquoise/30 animate-pulse"></div>
+                </div>
+              ) : status === RecordingStatus.Connecting || status === RecordingStatus.Initializing ? (
+                <div>
+                  <div className="loading-dots flex space-x-1 justify-center mb-2">
+                    <div className="w-2 h-2 bg-accent-blue rounded-full animate-bounce"></div>
+                    <div className="w-2 h-2 bg-accent-blue rounded-full animate-bounce delay-75"></div>
+                    <div className="w-2 h-2 bg-accent-blue rounded-full animate-bounce delay-150"></div>
+                  </div>
+                  <p>{getStatusMessage()}</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-lg font-light">É só falar que a transcrição vai começar</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        
+        {finalTranscription && (
+          <div className="space-y-2">
+            {finalTranscription.split('. ').map((sentence, index) => (
+              sentence && <p key={index} className="text-text-primary font-normal">{sentence.trim() + (sentence.endsWith('.') ? '' : '.')}</p>
+            ))}
+          </div>
+        )}
+        
+        {interimTranscription && (
+          <div className="flex">
+            <div className="w-1 h-auto bg-accent-turquoise mr-3 rounded opacity-60"></div>
+            <p className="text-accent-turquoise font-light animate-pulse">
+              {interimTranscription}
+              <span className="inline-block w-2 h-4 bg-accent-turquoise/40 ml-1 animate-pulse"></span>
+            </p>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

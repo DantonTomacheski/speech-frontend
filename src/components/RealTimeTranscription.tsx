@@ -1,52 +1,39 @@
-// src/components/RealTimeTranscription.tsx
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { RecordingStatus, WebSocketMessage, TranscriptionData, ErrorData } from '../types';
 import MessageBox from './MessageBox';
 import TranscriptionDisplay from './TranscriptionDisplay';
 import Controls from './Controls';
 
-// --- Constants ---
 const WEBSOCKET_URL = import.meta.env.VITE_WEBSOCKET_URL || 'ws://localhost:8081';
-const BUFFER_SIZE = 2048; // Audio buffer size (ScriptProcessorNode buffer size)
-const TARGET_SAMPLE_RATE = 48000; // Define target sample rate - MUST MATCH BACKEND EXPECTATION
+const BUFFER_SIZE = 2048;
+const TARGET_SAMPLE_RATE = 48000;
 
 console.log(`[Config] Frontend configured. WebSocket URL: ${WEBSOCKET_URL}, Target Sample Rate: ${TARGET_SAMPLE_RATE} Hz, Buffer Size: ${BUFFER_SIZE}`);
 
-/**
- * @function RealTimeTranscription
- * @description Main component managing audio capture, WebSocket connection,
- * and real-time transcription state. Includes fixes for React 19/StrictMode remounting issues.
- * @returns {React.ReactElement} The React element.
- */
 const RealTimeTranscription: React.FC = () => {
-    // --- State ---
     const [status, setStatus] = useState<RecordingStatus>(RecordingStatus.Inactive);
     const [finalTranscription, setFinalTranscription] = useState<string>('');
     const [interimTranscription, setInterimTranscription] = useState<string>('');
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
-    const [isRecording, setIsRecording] = useState<boolean>(false); // UI state for recording
+    const [isRecording, setIsRecording] = useState<boolean>(false);
+    const [audioLevels, setAudioLevels] = useState<number[]>([0, 0, 0, 0, 0]);
 
-    // --- Refs ---
     const socketRef = useRef<WebSocket | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
     const processorRef = useRef<ScriptProcessorNode | null>(null);
     const inputStreamRef = useRef<MediaStreamAudioSourceNode | null>(null);
     const mediaStreamRef = useRef<MediaStream | null>(null);
-    const isRecordingRef = useRef<boolean>(false); // Internal logic state for recording
-    const isCleanupScheduledRef = useRef<boolean>(false); // Flag to prevent double cleanup
-    const mountIdRef = useRef<number>(0); // Unique ID for each mount instance
-    const mountTimestampRef = useRef<number>(0); // Timestamp of the current mount
-    const isStrictModeUnmountRef = useRef<boolean>(false); // Flag to indicate the first unmount in StrictMode
+    const isRecordingRef = useRef<boolean>(false);
+    const isCleanupScheduledRef = useRef<boolean>(false);
+    const mountIdRef = useRef<number>(0);
+    const mountTimestampRef = useRef<number>(0);
+    const isStrictModeUnmountRef = useRef<boolean>(false);
 
-    // --- Callback Functions ---
-
-    // Utility to show temporary error messages
     const showMessage = useCallback((message: string) => {
         console.log(`[UI] Displaying message: "${message}"`);
         setErrorMessage(message);
     }, []);
 
-    // Helper to get WebSocket state name
     const getWebSocketStateName = useCallback((state: number | undefined): string => {
         if (state === undefined) return 'N/A';
         switch (state) {
@@ -58,7 +45,6 @@ const RealTimeTranscription: React.FC = () => {
         }
     }, []);
 
-    // WebSocket closing function (made more robust)
     const closeWebSocket = useCallback((currentMountId: number, reasonSuffix: string = "") => {
         const reason = `Client stopping transcription ${reasonSuffix}`.trim();
         console.log(`[WebSocket Close] Mount #${currentMountId} - closeWebSocket called. Reason: ${reason}`);
@@ -68,27 +54,23 @@ const RealTimeTranscription: React.FC = () => {
             return;
         }
 
-        const ws = socketRef.current; // Capture current socket
+        const ws = socketRef.current;
         const currentState = ws.readyState;
         console.log(`[WebSocket Close] Mount #${currentMountId} - Attempting to close WebSocket. Current state: ${currentState} (${getWebSocketStateName(currentState)})`);
 
-        // Prevent closing if already closing or closed
         if (currentState === WebSocket.CLOSING || currentState === WebSocket.CLOSED) {
             console.log(`[WebSocket Close] Mount #${currentMountId} - WebSocket already closing or closed.`);
             if (socketRef.current === ws) {
-                 socketRef.current = null; // Ensure ref is nullified
+                 socketRef.current = null;
             }
             return;
         }
 
-        // Remove listeners immediately
         ws.onopen = null;
         ws.onmessage = null;
         ws.onerror = null;
-        // Detach the main onclose handler to prevent it from running again for this explicit close
         ws.onclose = () => {
              console.log(`[WebSocket Close] Mount #${currentMountId} - Inner onclose for explicit close (Code: ${ws.readyState}). Socket ref is now null.`);
-             // Ensure ref is nullified after close completes
              if (socketRef.current === ws) {
                   socketRef.current = null;
              }
@@ -105,7 +87,6 @@ const RealTimeTranscription: React.FC = () => {
              } else {
                  console.log(`[WebSocket Close] Mount #${currentMountId} - Socket state changed before explicit close: ${getWebSocketStateName(ws.readyState)}`);
              }
-             // Nullify the main ref immediately after *initiating* close
              if (socketRef.current === ws) {
                 socketRef.current = null;
              }
@@ -115,7 +96,7 @@ const RealTimeTranscription: React.FC = () => {
             console.log(`[WebSocket Close] Mount #${currentMountId} - Sending 'stopStreaming' command.`);
             try {
                 ws.send(JSON.stringify({ command: 'stopStreaming' }));
-                setTimeout(initiateClose, 50); // Short delay for command send
+                setTimeout(initiateClose, 50);
             } catch (sendError) {
                 console.error(`[WebSocket Close] Mount #${currentMountId} - Error sending 'stopStreaming', closing immediately:`, sendError);
                 initiateClose();
@@ -125,15 +106,12 @@ const RealTimeTranscription: React.FC = () => {
             initiateClose();
         }
 
-    }, [getWebSocketStateName]); // Dependency
+    }, [getWebSocketStateName]);
 
-
-    // Audio cleanup function (made more robust)
     const cleanupAudio = useCallback((currentMountId: number) => {
         console.log(`[Audio Cleanup] Mount #${currentMountId} - Cleaning up audio resources...`);
         let cleaned = false;
 
-        // 1. Stop media stream tracks first
         if (mediaStreamRef.current) {
             console.log(`[Audio Cleanup] Mount #${currentMountId} - Stopping media stream tracks.`);
             mediaStreamRef.current.getTracks().forEach(track => track.stop());
@@ -141,27 +119,23 @@ const RealTimeTranscription: React.FC = () => {
             cleaned = true;
         }
 
-        // 2. Disconnect and nullify ScriptProcessorNode *before* closing context
         if (processorRef.current) {
-            const processor = processorRef.current; // Capture ref
+            const processor = processorRef.current;
             console.log(`[Audio Cleanup] Mount #${currentMountId} - Detaching onaudioprocess and disconnecting script processor node.`);
-            // CRITICAL FIX: Remove the event listener *before* disconnecting
             processor.onaudioprocess = null;
             try {
                  processor.disconnect();
             } catch (e) {
                  console.warn(`[Audio Cleanup] Mount #${currentMountId} - Error disconnecting processor (might be harmless):`, e);
             }
-            // Nullify ref only if it hasn't changed
             if(processorRef.current === processor) {
                  processorRef.current = null;
             }
             cleaned = true;
         }
 
-        // 3. Disconnect input stream node
         if (inputStreamRef.current) {
-             const inputStream = inputStreamRef.current; // Capture ref
+             const inputStream = inputStreamRef.current;
             console.log(`[Audio Cleanup] Mount #${currentMountId} - Disconnecting input stream node.`);
              try {
                  inputStream.disconnect();
@@ -174,9 +148,8 @@ const RealTimeTranscription: React.FC = () => {
             cleaned = true;
         }
 
-        // 4. Close AudioContext if it exists and is running/suspended
         if (audioContextRef.current) {
-            const context = audioContextRef.current; // Capture ref
+            const context = audioContextRef.current;
             const currentState = context.state;
             console.log(`[Audio Cleanup] Mount #${currentMountId} - AudioContext found (state: ${currentState}).`);
             if (currentState !== 'closed') {
@@ -187,26 +160,22 @@ const RealTimeTranscription: React.FC = () => {
                 }).catch(err => {
                     console.error(`[Audio Cleanup] Mount #${currentMountId} - Error closing AudioContext:`, err);
                 }).finally(() => {
-                    // Ensure ref is cleared even if closing failed, only if it's the same context
                     if (audioContextRef.current === context) {
                         audioContextRef.current = null;
                     }
                 });
             } else {
                  console.log(`[Audio Cleanup] Mount #${currentMountId} - AudioContext was already closed.`);
-                 // Ensure ref is cleared if it points to the already closed context
                  if (audioContextRef.current === context) {
                       audioContextRef.current = null;
                  }
             }
         }
 
-        // 5. Ensure recording state refs/state are false
         if (isRecordingRef.current) {
             console.log(`[Audio Cleanup] Mount #${currentMountId} - Setting internal recording state to false.`);
             isRecordingRef.current = false;
         }
-        // Use functional update for UI state to avoid stale closures
         setIsRecording(prev => {
             if (prev) {
                 console.log(`[Audio Cleanup] Mount #${currentMountId} - Setting UI recording state to false.`);
@@ -215,19 +184,15 @@ const RealTimeTranscription: React.FC = () => {
             return prev;
         });
 
-
         if (cleaned) {
             console.log(`[Audio Cleanup] Mount #${currentMountId} - Audio resources cleanup finished.`);
         } else {
             console.log(`[Audio Cleanup] Mount #${currentMountId} - No active audio resources found to clean up.`);
         }
-    }, []); // Dependencies removed as it should be stable
+    }, []);
 
-
-    // Combined cleanup function
     const cleanupResources = useCallback((currentMountId: number, reasonSuffix: string = "") => {
         console.log(`[Cleanup] Mount #${currentMountId} - Initiating resource cleanup. Reason suffix: "${reasonSuffix}"`);
-        // Prevent cleanup from running multiple times concurrently for the same mount
         if (isCleanupScheduledRef.current) {
              console.log(`[Cleanup] Mount #${currentMountId} - Cleanup already scheduled or running, skipping.`);
              return;
@@ -235,15 +200,12 @@ const RealTimeTranscription: React.FC = () => {
         isCleanupScheduledRef.current = true;
         console.log(`[Cleanup] Mount #${currentMountId} - Cleanup lock acquired.`);
 
-        // Cleanup order: Audio first, then WebSocket
         cleanupAudio(currentMountId);
         closeWebSocket(currentMountId, reasonSuffix);
 
-        // Reset internal recording state just in case
         isRecordingRef.current = false;
-        setIsRecording(false); // Ensure UI state matches
+        setIsRecording(false);
 
-        // Update status if not already in error/inactive
         setStatus(prevStatus => {
             if (prevStatus !== RecordingStatus.Error && prevStatus !== RecordingStatus.Inactive) {
                 console.log(`[Cleanup] Mount #${currentMountId} - Setting status to Inactive.`);
@@ -253,7 +215,6 @@ const RealTimeTranscription: React.FC = () => {
         });
 
         console.log(`[Cleanup] Mount #${currentMountId} - Resource cleanup process complete.`);
-        // Release the lock after a short delay
         setTimeout(() => {
             console.log(`[Cleanup] Mount #${currentMountId} - Releasing cleanup lock.`);
             isCleanupScheduledRef.current = false;
@@ -261,8 +222,6 @@ const RealTimeTranscription: React.FC = () => {
 
     }, [cleanupAudio, closeWebSocket]);
 
-
-    // Main function to stop recording
     const stopRecording = useCallback((currentMountId: number) => {
         console.log(`[Action] Mount #${currentMountId} - Stop recording requested.`);
 
@@ -274,23 +233,20 @@ const RealTimeTranscription: React.FC = () => {
 
         console.log(`[Action] Mount #${currentMountId} - Proceeding with stopping recording... Setting status to STOPPING.`);
         setStatus(RecordingStatus.Stopping);
-        isRecordingRef.current = false; // Set internal state immediately
-        setIsRecording(false); // Update UI state
+        isRecordingRef.current = false;
+        setIsRecording(false);
 
-        // Initiate cleanup
         cleanupResources(currentMountId, "(stop requested)");
 
         console.log(`[Action] Mount #${currentMountId} - Stop recording process finished initiating cleanup.`);
 
-    }, [cleanupResources]); // Depends on cleanupResources
+    }, [cleanupResources]);
 
-
-    // --- Audio Processing ---
     const audioPacketCounter = useRef(0);
     const lastLogTime = useRef(Date.now());
 
     const handleAudioProcess = useCallback((event: AudioProcessingEvent) => {
-        const currentMountId = mountIdRef.current; // Get current mount ID for context
+        const currentMountId = mountIdRef.current;
 
         if (!isRecordingRef.current) {
             if (Date.now() - lastLogTime.current > 5000) {
@@ -308,28 +264,45 @@ const RealTimeTranscription: React.FC = () => {
              }
              if (isRecordingRef.current && (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING)) {
                  console.error(`[Audio Processing] Mount #${currentMountId} - WebSocket closed/closing unexpectedly while recording! Forcing stop.`);
-                 stopRecording(currentMountId); // Use current mount ID
+                 stopRecording(currentMountId);
              }
             return;
         }
 
         audioPacketCounter.current++;
         const audioData = event.inputBuffer.getChannelData(0);
+        
+        const bufferLength = audioData.length;
+        let sumSquares = 0;
+        for (let i = 0; i < bufferLength; i++) {
+            sumSquares += audioData[i] * audioData[i];
+        }
+        const rms = Math.sqrt(sumSquares / bufferLength);
+        
+        const scaledVolume = Math.min(100, Math.max(20, rms * 700));
+        
+        setAudioLevels(prev => {
+            const newLevels = [...prev];
+            const indexToUpdate = Math.floor(Math.random() * 5);
+            newLevels[indexToUpdate] = scaledVolume;
+            return newLevels;
+        });
 
         try {
             const bufferToSend = audioData.buffer;
             ws.send(bufferToSend);
             if (audioPacketCounter.current % 200 === 0) {
-                // console.log(`[Audio Processing] Mount #${currentMountId} - Sent audio packet #${audioPacketCounter.current}`); // Reduce logging
             }
         } catch (sendError) {
             console.error(`[WebSocket] Mount #${currentMountId} - Error sending audio data:`, sendError);
-            stopRecording(currentMountId); // Use current mount ID
+            stopRecording(currentMountId);
         }
-    }, [getWebSocketStateName, stopRecording]); // Added stopRecording dependency
+    }, [getWebSocketStateName, stopRecording]);
 
+    interface ExtendedWindow extends Window {
+        webkitAudioContext?: typeof AudioContext;
+    }
 
-    // --- Audio Initialization ---
     const initializeAudio = useCallback(async (currentMountId: number) => {
         console.log(`[Audio Init] Mount #${currentMountId} - Initializing audio...`);
 
@@ -356,11 +329,10 @@ const RealTimeTranscription: React.FC = () => {
         try {
             console.log(`[Audio Init] Mount #${currentMountId} - Requesting AudioContext with sample rate: ${TARGET_SAMPLE_RATE} Hz`);
             const contextOptions: AudioContextOptions = { sampleRate: TARGET_SAMPLE_RATE };
-            const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+            const AudioContext = window.AudioContext || (window as ExtendedWindow).webkitAudioContext;
             if (!AudioContext) throw new Error("Browser does not support Web Audio API.");
 
             const context = new AudioContext(contextOptions);
-            // Check if mount changed *during* context creation (unlikely but possible)
              if (currentMountId !== mountIdRef.current) {
                  console.warn(`[Audio Init] Mount #${currentMountId} - Aborting after context creation: No longer the active mount. Closing context.`);
                  context.close().catch(e => console.error("Error closing obsolete context:", e));
@@ -378,20 +350,16 @@ const RealTimeTranscription: React.FC = () => {
                 await context.resume();
                  if (currentMountId !== mountIdRef.current) {
                      console.warn(`[Audio Init] Mount #${currentMountId} - Aborting after context resume: No longer the active mount.`);
-                     cleanupAudio(currentMountId); // Clean up partially initialized resources
+                     cleanupAudio(currentMountId);
                      return;
                  }
                 console.log(`[Audio Init] Mount #${currentMountId} - AudioContext resumed. State: ${context.state}`);
-                if (context.state !== 'running') throw new Error(`AudioContext could not be resumed. State: ${context.state}`);
             }
 
+            if (context.state !== 'running') throw new Error(`AudioContext is not running. State: ${context.state}`);
+
             console.log(`[Audio Init] Mount #${currentMountId} - Requesting microphone access...`);
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: {
-                 // Consider adding echo cancellation if needed
-                 // echoCancellation: true,
-                 // autoGainControl: true,
-                 // noiseSuppression: true
-            }, video: false });
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: {}, video: false });
              if (currentMountId !== mountIdRef.current) {
                  console.warn(`[Audio Init] Mount #${currentMountId} - Aborting after getUserMedia: No longer the active mount. Stopping tracks.`);
                  stream.getTracks().forEach(track => track.stop());
@@ -402,9 +370,8 @@ const RealTimeTranscription: React.FC = () => {
             console.log(`[Audio Init] Mount #${currentMountId} - Microphone access granted.`);
 
             inputStreamRef.current = context.createMediaStreamSource(stream);
-            console.warn("[Audio Init] Using deprecated ScriptProcessorNode. Consider AudioWorklet.");
-            const processor = context.createScriptProcessor(BUFFER_SIZE, 1, 1);
-            processor.onaudioprocess = handleAudioProcess; // Assign callback first
+                        const processor = context.createScriptProcessor(BUFFER_SIZE, 1, 1);
+            processor.onaudioprocess = handleAudioProcess;
             processorRef.current = processor;
 
             inputStreamRef.current.connect(processor);
@@ -439,12 +406,10 @@ const RealTimeTranscription: React.FC = () => {
             setStatus(RecordingStatus.Error);
             isRecordingRef.current = false;
             setIsRecording(false);
-            cleanupAudio(currentMountId); // Use failing mount ID for cleanup context
+            cleanupAudio(currentMountId);
         }
     }, [showMessage, cleanupAudio, handleAudioProcess]);
 
-
-    // --- WebSocket Connection ---
     const connectWebSocket = useCallback((currentMountId: number) => {
         console.log(`[WebSocket Connect] Mount #${currentMountId} - connectWebSocket called.`);
 
@@ -455,7 +420,7 @@ const RealTimeTranscription: React.FC = () => {
 
         if (socketRef.current) {
             console.warn(`[WebSocket Connect] Mount #${currentMountId} - WebSocket already exists (State: ${getWebSocketStateName(socketRef.current.readyState)}). Cleaning up old socket first.`);
-            closeWebSocket(currentMountId, "(superseded)"); // Pass reason suffix
+            closeWebSocket(currentMountId, "(superseded)");
         }
 
         setStatus(RecordingStatus.Connecting);
@@ -465,9 +430,8 @@ const RealTimeTranscription: React.FC = () => {
 
         try {
             const ws = new WebSocket(WEBSOCKET_URL);
-            // Add mount ID to instance for debugging
             (ws as any)._mountId = currentMountId;
-            socketRef.current = ws; // Assign ref immediately
+            socketRef.current = ws;
 
             ws.onopen = () => {
                 const wsMountId = (ws as any)._mountId;
@@ -478,13 +442,12 @@ const RealTimeTranscription: React.FC = () => {
                      if (socketRef.current === ws) {
                          closeWebSocket(wsMountId, "(opened on obsolete mount)");
                      } else {
-                          // If ref already changed, just close this specific ws instance
                           ws.close(1000, "Opened on obsolete mount");
                      }
                      return;
                  }
                  console.log(`[WebSocket Connect] Mount #${wsMountId} - Socket open, proceeding to initialize audio.`);
-                initializeAudio(wsMountId); // Pass the correct mount ID
+                initializeAudio(wsMountId);
             };
 
             ws.onmessage = (event) => {
@@ -494,7 +457,6 @@ const RealTimeTranscription: React.FC = () => {
                      return;
                  }
 
-                // console.log(`[WebSocket Message] Mount #${wsMountId} - <<< Message received.`); // Reduce logging
                 try {
                     if (typeof event.data !== 'string') {
                         console.warn(`[WebSocket Message] Mount #${wsMountId} - Received non-string message:`, event.data); return;
@@ -502,18 +464,15 @@ const RealTimeTranscription: React.FC = () => {
                     let messageData;
                     try { messageData = JSON.parse(event.data); } catch (e) { console.error(`[WebSocket Message] Mount #${wsMountId} - Failed JSON parse:`, e); return; }
 
-                    // console.log(`[WebSocket Message] Mount #${wsMountId} - Parsed data:`, messageData); // Reduce logging
-
                     if (messageData && typeof messageData === 'object') {
                         if ('error' in messageData) {
                             const errorData = messageData as ErrorData;
-                            console.error(`ðŸ”´ [WebSocket Message] Mount #${wsMountId} - SERVER ERROR:`, errorData.error);
+                            console.error(`ðŸ"´ [WebSocket Message] Mount #${wsMountId} - SERVER ERROR:`, errorData.error);
                             showMessage(`Erro do servidor: ${errorData.error}`);
-                            stopRecording(mountIdRef.current); // Stop current active recording
+                            stopRecording(mountIdRef.current);
                         } else if ('transcript' in messageData) {
                             const transcriptionData = messageData as TranscriptionData;
                             if (transcriptionData.isFinal) {
-                                // console.log(`[WebSocket Message] Mount #${wsMountId} - ðŸŸ¢ Final: "${transcriptionData.transcript}"`); // Reduce logging
                                 setFinalTranscription(prev => prev + transcriptionData.transcript + ' ');
                                 setInterimTranscription('');
                             } else {
@@ -542,12 +501,10 @@ const RealTimeTranscription: React.FC = () => {
                 setStatus(RecordingStatus.Error);
                 isRecordingRef.current = false;
                 setIsRecording(false);
-                 // onclose will handle cleanup
             };
 
             ws.onclose = (event) => {
                  const wsMountId = (ws as any)._mountId;
-                 // Only process close event if it belongs to the currently tracked socket OR if socketRef is already null (meaning cleanup was initiated)
                  if (socketRef.current !== null && socketRef.current !== ws) {
                      console.warn(`[WebSocket Close] Mount #${wsMountId} - Received close event for an old/inactive socket instance (Code: ${event.code}). Ignoring.`);
                      return;
@@ -557,22 +514,18 @@ const RealTimeTranscription: React.FC = () => {
 
                 const wasRecording = isRecordingRef.current;
 
-                // Nullify the ref *only if* it currently points to this closing socket
                 if (socketRef.current === ws) {
                     console.log(`[WebSocket Close] Mount #${wsMountId} - Nullifying socketRef.`);
                     socketRef.current = null;
                 }
 
-                // Ensure recording state is false
                 if (isRecordingRef.current) isRecordingRef.current = false;
                 setIsRecording(false);
 
-                // Attempt audio cleanup only if this close event corresponds to the *active* mount ID
-                // or if it's a close event for a socket that was being actively used (even if mount ID changed slightly before close)
                 if (wsMountId === mountIdRef.current || wasRecording) {
                     if (audioContextRef.current || mediaStreamRef.current || processorRef.current || inputStreamRef.current) {
                         console.log(`[WebSocket Close] Mount #${wsMountId} - Initiating audio cleanup as resources might exist for active/previous recording.`);
-                        cleanupAudio(wsMountId); // Use the ID associated with the closing socket for context
+                        cleanupAudio(wsMountId);
                     } else {
                          console.log(`[WebSocket Close] Mount #${wsMountId} - No audio resources detected, skipping cleanup.`);
                     }
@@ -580,17 +533,16 @@ const RealTimeTranscription: React.FC = () => {
                      console.log(`[WebSocket Close] Mount #${wsMountId} - Close event for non-active mount, skipping audio cleanup.`);
                 }
 
-                 // Determine final UI status
                  setStatus(prevStatus => {
-                     if (prevStatus === RecordingStatus.Error && event.code !== 1000) { return RecordingStatus.Error; } // Don't override error unless clean close
-                     if (event.code === 1000) { // Clean close
+                     if (prevStatus === RecordingStatus.Error && event.code !== 1000) { return RecordingStatus.Error; }
+                     if (event.code === 1000) {
                          console.log(`[WebSocket Close] Mount #${wsMountId} - Clean closure. Setting status to Inactive.`);
                          return RecordingStatus.Inactive;
-                     } else if (wasRecording) { // Unexpected close while recording
+                     } else if (wasRecording) {
                          console.warn(`[WebSocket Close] Mount #${wsMountId} - Unexpected closure (Code: ${event.code}) while recording. Setting status to Error.`);
                          showMessage(`Conexão perdida inesperadamente (Cód: ${event.code}).`);
                          return RecordingStatus.Error;
-                     } else { // Unexpected close while not recording
+                     } else {
                          console.log(`[WebSocket Close] Mount #${wsMountId} - Connection closed unexpectedly (Code: ${event.code}) while not recording. Setting status to Inactive.`);
                           if (!errorMessage) { showMessage(`Conexão fechada (Cód: ${event.code}).`); }
                          return RecordingStatus.Inactive;
@@ -608,59 +560,46 @@ const RealTimeTranscription: React.FC = () => {
         }
     }, [initializeAudio, showMessage, cleanupAudio, stopRecording, closeWebSocket, getWebSocketStateName, errorMessage]);
 
-
-    // --- Effect for Initialization and Cleanup ---
     useEffect(() => {
         const currentMountId = Date.now();
         const currentTimestamp = Date.now();
         mountIdRef.current = currentMountId;
         mountTimestampRef.current = currentTimestamp;
         isCleanupScheduledRef.current = false;
-        // Reset strict mode flag on new mount
         isStrictModeUnmountRef.current = false;
 
         console.log(`[React Lifecycle] ===== Component MOUNT #${currentMountId} =====`);
 
-        // Detect if this is the *second* mount in StrictMode
-        const isSecondMount = mountCounterRef.current === 1 && (Date.now() - mountTimestampRef.current < 100); // Check if previous mount was very recent
+        const isSecondMount = mountCounterRef.current === 1 && (Date.now() - mountTimestampRef.current < 100);
         if (isSecondMount) {
              console.log(`[React Lifecycle] Mount #${currentMountId} - Detected as likely second mount in StrictMode.`);
         }
-        mountCounterRef.current++; // Increment after check
+        mountCounterRef.current++;
 
         return () => {
             const unmountTimestamp = Date.now();
             const timeSinceMount = unmountTimestamp - mountTimestampRef.current;
             console.log(`[React Lifecycle] ===== Component UNMOUNT #${currentMountId} (after ${timeSinceMount}ms) =====`);
 
-            // Detect if this is the *first* unmount in StrictMode
-            // Condition: It's the first mount instance (mountCounterRef was 1 before increment)
-            // AND the unmount happens very quickly after mount
-             const isLikelyStrictModeUnmount = mountCounterRef.current === 1 && timeSinceMount < 500; // Adjust threshold if needed
+             const isLikelyStrictModeUnmount = mountCounterRef.current === 1 && timeSinceMount < 500;
 
             if (isLikelyStrictModeUnmount) {
                 console.warn(`[React Lifecycle] Unmount #${currentMountId} - Detected as likely FIRST unmount in StrictMode. Skipping cleanup.`);
-                isStrictModeUnmountRef.current = true; // Set flag
-                // Crucially, DO NOT call cleanupResources here
+                isStrictModeUnmountRef.current = true;
             } else {
                  console.log(`[React Lifecycle] Unmount #${currentMountId} - Performing cleanup (Not detected as StrictMode first unmount).`);
-                 // Initiate cleanup using the ID of the mount instance that is unmounting
                  cleanupResources(currentMountId, "(final unmount)");
             }
         };
-    }, [cleanupResources]); // Depend only on the stable cleanup function
+    }, [cleanupResources]);
 
-     // Counter ref to track mount count across renders but reset outside useEffect
      const mountCounterRef = useRef(0);
      useEffect(() => {
-          // Reset mount counter when the component *truly* unmounts (not just StrictMode)
           return () => {
                mountCounterRef.current = 0;
           }
      },[])
 
-
-    // --- Button Handlers ---
     const handleStart = () => {
         const currentMountId = mountIdRef.current;
         console.log(`[Action] Mount #${currentMountId} - Start button clicked.`);
@@ -681,41 +620,92 @@ const RealTimeTranscription: React.FC = () => {
         stopRecording(currentMountId);
     };
 
-
-    // --- Rendering ---
     return (
-        <div className="bg-white p-6 md:p-8 rounded-lg shadow-xl w-full max-w-2xl mx-auto mt-8 border border-gray-200">
-            <h1 className="text-xl md:text-2xl font-bold mb-6 text-center text-gray-800">
-                🎙️ Transcrição React em Tempo Real (Fix v2) 🎙️
-            </h1>
+      <div className="w-full flex flex-col items-center justify-center">
+            
+            <header className="mb-8 text-center relative">
+                <div className={`relative inline-flex items-center justify-center p-5 mb-4 rounded-full w-28 h-28 
+                    ${isRecording 
+                      ? 'bg-gradient-to-br from-accent-red to-accent-red/70 animate-pulse-recording' 
+                      : 'bg-gradient-to-br from-accent-turquoise/30 to-transparent animate-pulse-glow'}`}>
+                    
+                    <div className="relative flex items-center justify-center w-20 h-20 bg-gradient-to-br from-primary-dark to-primary rounded-full z-10">
+                        {isRecording && (
+                            <div className="absolute inset-0 flex items-center justify-center">
+                                <div className="w-24 h-24 flex justify-between items-center">
+                                    {audioLevels.map((level, i) => (
+                                        <div 
+                                            key={i} 
+                                            className="w-1 bg-accent-red rounded-full wave-bar"
+                                            style={{
+                                                height: `${level}%`,
+                                                animationDelay: `${i * 0.1}s`,
+                                            }}
+                                        ></div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                        
+                        {isRecording && (
+                          <div className="absolute -top-1 -right-1 bg-accent-red text-white text-xs px-1.5 py-0.5 rounded-full font-semibold shadow-glow-red">
+                            REC
+                          </div>
+                        )}
+                        
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" 
+                            className={`w-10 h-10 ${isRecording ? 'text-white' : 'text-accent-turquoise'} drop-shadow-lg z-20`}>
+                          <path fillRule="evenodd" d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3zm-1.5 3a1.5 1.5 0 0 1 3 0v7a1.5 1.5 0 0 1-3 0V5z" clipRule="evenodd" />
+                          <path d="M8.25 8a.75.75 0 0 0-1.5 0v4a5.25 5.25 0 1 0 10.5 0V8a.75.75 0 0 0-1.5 0v4a3.75 3.75 0 1 1-7.5 0V8z" />
+                          <path d="M10.5 17.55a7.5 7.5 0 0 0 3 0V20.5h-3v-2.95z" />
+                        </svg>
+                    </div>
+                </div>
+            </header>
 
-            {/* Controls Component */}
             <Controls
                 onStart={handleStart}
                 onStop={handleStop}
-                isRecording={isRecording} // Pass UI recording state
+                isRecording={isRecording}
                 status={status}
             />
 
-            {/* Transcription Display Component */}
             <TranscriptionDisplay
                 finalTranscription={finalTranscription}
                 interimTranscription={interimTranscription}
                 status={status}
-                isRecording={isRecording} // Pass UI recording state
+                isRecording={isRecording}
             />
 
-            {/* Message Box for Errors/Info */}
             <MessageBox message={errorMessage} onClose={() => setErrorMessage(null)} />
 
-            {/* Optional: Display State for Debugging */}
-            <div className="text-xs text-gray-500 text-center mt-4">
-                 Mount ID: {mountIdRef.current} |
-                 WS State: {getWebSocketStateName(socketRef.current?.readyState)} |
-                 Audio State: {audioContextRef.current?.state ?? 'N/A'} |
-                 Rec Ref: {isRecordingRef.current ? 'Yes' : 'No'} |
-                 UI Rec: {isRecording ? 'Yes' : 'No'} |
-                 Status: {status}
+            <div className="flex items-center justify-between w-full max-w-md mt-6 px-3">
+                <div className="flex items-center text-sm text-text-secondary">
+                    <div className={`w-2 h-2 rounded-full mr-2 ${
+                        status === RecordingStatus.Recording ? 'bg-accent-red animate-pulse' : 
+                        status === RecordingStatus.Connecting || status === RecordingStatus.Initializing ? 'bg-accent-blue animate-pulse' : 
+                        'bg-text-secondary'
+                    }`}></div>
+                    <span>{status}</span>
+                </div>
+                
+                {isRecording && (
+                    <div className="text-accent-red text-sm font-semibold font-mono">
+                        00:00:00
+                    </div>
+                )}
+            </div>
+
+            <div className="text-xs text-gray-500 text-center mt-4 hidden">
+                <div className="flex flex-wrap justify-center gap-x-2 gap-y-1">
+                    <span>Mount ID: {mountIdRef.current}</span>
+                    <span>•</span>
+                    <span>WS: {getWebSocketStateName(socketRef.current?.readyState)}</span>
+                    <span>•</span>
+                    <span>Audio: {audioContextRef.current?.state ?? 'N/A'}</span>
+                    <span>•</span>
+                    <span>Rec: {isRecordingRef.current ? 'Yes' : 'No'}</span>
+                </div>
             </div>
         </div>
     );
